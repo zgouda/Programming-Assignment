@@ -1,0 +1,364 @@
+section .data
+    ; ----------------------------------------------------------------------
+    ; Constant strings and their lengths
+    ; We use 'db' to define bytes (characters) in memory.
+    ; 'equ $ - label' is used to calculate string length automatically.
+    ; ----------------------------------------------------------------------
+    prompt1         db "Enter first number: "
+    len1            equ $ - prompt1
+
+    prompt_op       db "Enter operator (+, -, *, /): "
+    len_op          equ $ - prompt_op
+
+    prompt2         db "Enter second number: "
+    len2            equ $ - prompt2
+
+    msg_result      db "Result: "
+    len_res         equ $ - msg_result
+
+    ; Specific error messages for any issues that might happen
+    err_invalid_num db "Error: Invalid number (only integers allowed)", 10
+    len_err_num     equ $ - err_invalid_num
+
+    err_invalid_op  db "Error: Invalid operator (use +, -, *, or / only)", 10
+    len_err_op      equ $ - err_invalid_op
+
+    err_div_zero    db "Error: Division by zero is not allowed", 10
+    len_err_div     equ $ - err_div_zero
+
+    newline         db 10                   ; Just a line feed (new line)
+
+section .bss
+    ; ----------------------------------------------------------------------
+    ; Reserved space in memory
+    ; These areas are automatically set to 0 when program starts
+    ; ----------------------------------------------------------------------
+    buffer      resb 32         ; Buffer for user input (max ~31 chars + null)
+    num1        resq 1          ; 64-bit signed integer for first number
+    num2        resq 1          ; 64-bit signed integer for second number
+    result      resq 1          ; 64-bit signed integer for final result
+    op          resb 1          ; One byte to store the operator char
+
+section .text
+    global _start
+
+_start:
+    ; ======================================================================
+    ; Getting first number from user
+    ; ======================================================================
+    ; Print prompt using syscall write
+    mov rax, 1                  ; syscall number: write
+    mov rdi, 1                  ; file descriptor: stdout (1)
+    mov rsi, prompt1            ; pointer to string (memory address)
+    mov rdx, len1               ; length of string
+    syscall
+
+    ; Read user input into buffer syscall read
+    mov rax, 0                  ; syscall: read
+    mov rdi, 0                  ; stdin (keyboard)
+    mov rsi, buffer             ; where to store input
+    mov rdx, 32                 ; max bytes to read
+    syscall
+
+    ; Convert string to number and check if valid
+    mov rdi, buffer             ; rdi = pointer to input string (function parameter)
+    call parse_int              ; returns: rax = number, rdx = 0(success)/1(error)
+
+    cmp rdx, 0                  ; Check if parsing failed
+    jne .error_invalid_first    ; If error → jump to error handler
+
+    mov [num1], rax             ; Store valid number in memory
+
+    ; ======================================================================
+    ; Get operator
+    ; ======================================================================
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, prompt_op
+    mov rdx, len_op
+    syscall
+
+    mov rax, 0
+    mov rdi, 0
+    mov rsi, buffer
+    mov rdx, 4                  ; Because only 1-2 characters will be used
+    syscall
+
+    mov al, [buffer]            ; Get first character from input
+    mov [op], al                ; Save operator in memory to prevent any overwriting
+
+    ; ======================================================================
+    ; Get second number
+    ; ======================================================================
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, prompt2
+    mov rdx, len2
+    syscall
+
+    mov rax, 0
+    mov rdi, 0
+    mov rsi, buffer
+    mov rdx, 32
+    syscall
+
+    mov rdi, buffer
+    call parse_int
+
+    cmp rdx, 0
+    jne .error_invalid_second
+
+    mov [num2], rax
+
+    ; ======================================================================
+    ; Choose and perform arithmetic operation
+    ; Using jump if equal for control flow
+    ; ======================================================================
+    mov al, [op]                ; Load operator char
+
+    cmp al, '+'
+    je .do_add
+
+    cmp al, '-'
+    je .do_sub
+
+    cmp al, '*'
+    je .do_mul
+
+    cmp al, '/'
+    je .do_div
+
+    jmp .error_invalid_operator ; If none matched > invalid operator
+
+.do_add:
+    mov rax, [num1]
+    add rax, [num2]             ; add = addition
+    mov [result], rax
+    jmp .print_result
+
+.do_sub:
+    mov rax, [num1]
+    sub rax, [num2]             ; sub = subtraction
+    mov [result], rax
+    jmp .print_result
+
+.do_mul:
+    mov rax, [num1]
+    imul rax, [num2]            ; imul = multiplication
+    mov [result], rax
+    jmp .print_result
+
+.do_div:
+    mov rax, [num2]
+    cmp rax, 0                  ; check for division by zero
+    je .error_div_by_zero
+
+    mov rax, [num1]
+    cqo                         ; Sign-extend rax into rdx:rax (needed for idiv)
+    idiv qword [num2]           ; Signed division > quotient in rax
+    mov [result], rax
+    jmp .print_result
+
+; ======================================================================
+; Error handling messages for each type of mistake
+; ======================================================================
+.error_invalid_first:
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, err_invalid_num
+    mov rdx, len_err_num
+    syscall
+    jmp .exit
+
+.error_invalid_second:
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, err_invalid_num
+    mov rdx, len_err_num
+    syscall
+    jmp .exit
+
+.error_invalid_operator:
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, err_invalid_op
+    mov rdx, len_err_op
+    syscall
+    jmp .exit
+
+.error_div_by_zero:
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, err_div_zero
+    mov rdx, len_err_div
+    syscall
+    jmp .exit
+
+; ======================================================================
+; Print final result
+; ======================================================================
+.print_result:
+    ; Print "Result: "
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, msg_result
+    mov rdx, len_res
+    syscall
+
+    ; Convert number to string
+    mov rax, [result]           ; Number we want to print
+    mov rdi, buffer             ; Where to write the string
+    call int_to_string          ; Returns length in rax
+
+    ; Print the string
+    mov rdx, rax                ; Length from function
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, buffer
+    syscall
+
+    ; Final newline
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, newline
+    mov rdx, 1
+    syscall
+
+; ======================================================================
+; program exit
+; ======================================================================
+.exit:
+    mov rax, 60                 ; syscall: exit
+    xor rdi, rdi                ; return code 0 = success
+    syscall
+
+; =============================================================================
+; Function: parse_int
+; Purpose: Convert string > signed 64-bit integer + input validation
+; Input:  rdi = pointer to string
+; Output: rax = number (if valid), rdx = 0 (success) / 1 (error)
+; =============================================================================
+parse_int:
+    push rbx                    ; Save registers we will use
+    push r12
+
+    xor r8, r8                  ; accumulator = 0
+    mov r9, 1                   ; sign = +1 by default
+    xor r12, r12                ; digit counter (to detect empty input)
+
+    ; Check for optional minus sign
+    mov bl, [rdi]
+    cmp bl, '-'
+    jne .no_sign
+    mov r9, -1                  ; Change sign
+    inc rdi                     ; Skip the '-' character
+
+.no_sign:
+.convert_loop:
+    mov bl, [rdi]
+    test bl, bl                 ; End of string
+    jz .check_digits
+    cmp bl, 10                  ; New line
+    je .check_digits
+
+    cmp bl, '0'
+    jb .invalid                 ; Below '0' → invalid
+    cmp bl, '9'
+    ja .invalid                 ; Above '9' → invalid
+
+    sub bl, '0'                 ; Convert ASCII char → real digit (0-9)
+    movzx rbx, bl               ; Zero-extend to 64-bit
+
+    imul r8, r8, 10             ; accumulator *= 10
+    add r8, rbx                 ; accumulator += digit
+
+    inc rdi                     ; Next character
+    mov r12, 1                  ; We saw at least one digit
+    jmp .convert_loop
+
+.check_digits:
+    cmp r12, 0                  ; Check if we see any digits at all?
+    je .invalid                 ; Just sign or empty > error
+
+    mov rax, r8
+    imul rax, r9                ; Apply sign
+
+    xor rdx, rdx                ; Success flag = 0
+    jmp .done
+
+.invalid:
+    xor rax, rax
+    mov rdx, 1                  ; Error flag = 1
+
+.done:
+    pop r12
+    pop rbx
+    ret                         ; Return to caller
+
+; =============================================================================
+; Function: int_to_string
+; Purpose: Convert signed 64-bit integer → ASCII string
+; Used because we can only print strings with write syscall
+; =============================================================================
+int_to_string:
+    push rbx
+    push r12
+    push r13
+
+    mov r12, rdi                ; Save start of buffer
+    mov r13, rdi                ; Current write position
+
+    ; Handle negative numbers
+    cmp rax, 0
+    jge .positive
+    mov byte [r13], '-'
+    inc r13
+    neg rax                     ; Make number positive
+
+.positive:
+    ; Special case: number is zero
+    cmp rax, 0
+    jne .not_zero
+    mov byte [r13], '0'
+    inc r13
+    jmp .reverse
+
+.not_zero:
+    mov rbx, 10                 ; Divisor (base 10)
+
+.convert:
+    xor rdx, rdx                ; Clear rdx for division
+    div rbx                     ; rax = quotient, rdx = remainder
+    add dl, '0'                 ; Convert to ASCII
+    mov [r13], dl               ; Store digit
+    inc r13                     ; Next position
+    test rax, rax               ; More digits
+    jnz .convert
+
+.reverse:
+    ; Reverse digits in place (they were generated backwards)
+    mov rsi, r13
+    dec rsi                     ; Point to last character
+    mov rdi, r12                ; Start position
+
+    cmp rdi, rsi
+    jge .done_reverse
+
+.reverse_loop:
+    mov al, [rdi]
+    mov bl, [rsi]
+    mov [rdi], bl
+    mov [rsi], al
+    inc rdi
+    dec rsi
+    cmp rdi, rsi
+    jl .reverse_loop
+
+.done_reverse:
+    mov rax, r13
+    sub rax, r12                ; Calculate string length
+
+    pop r13
+    pop r12
+    pop rbx
+    ret
